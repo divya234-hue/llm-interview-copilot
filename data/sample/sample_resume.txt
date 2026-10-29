@@ -1,0 +1,21 @@
+RIYA SHARMA
+Artificial Intelligence and Data Science student
+
+EDUCATION
+B.Tech in Artificial Intelligence and Data Science, 2022-2026
+
+SKILLS
+Python, SQL, FastAPI, React, machine learning, pandas, NumPy, Git
+
+PROJECTS
+Campus Helpdesk Assistant
+- Built a question-answering prototype using Python and FastAPI.
+- Added document chunking and semantic retrieval for campus FAQs.
+- Created a React interface for submitting questions and reviewing sources.
+
+Retail Demand Forecasting
+- Used pandas and scikit-learn to explore weekly sales data.
+- Compared baseline forecasting approaches and documented model limitations.
+
+EXPERIENCE
+Academic projects and coursework; no industry experience listed.

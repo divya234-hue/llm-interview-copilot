@@ -1,0 +1,12 @@
+We are looking for an AI/ML Intern to help build and evaluate practical machine learning features.
+
+Responsibilities:
+- Develop Python services and data processing workflows.
+- Experiment with machine learning and NLP approaches.
+- Build and evaluate LLM and retrieval-augmented generation prototypes.
+- Collaborate with product and engineering teams.
+- Write clear tests and document technical decisions.
+
+Required skills: Python, machine learning, NLP fundamentals, SQL, Git.
+Preferred skills: FastAPI, React, embeddings, vector databases, Docker.
+Experience: Coursework, projects, or internship experience in AI/ML.
