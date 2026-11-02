@@ -1,60 +1,19 @@
+import { api } from './api'
+import type { ResumeAnalysis } from '../types'
+
+export type IndexedSource = 'resume' | 'job_description'
+export type IndexResult = { indexed_chunks: number; unchanged: boolean; source: string; document_id: string }
+
 export const resumeService = {
   uploadResume: (file: File) =>
-    fetch(`${import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'}/resume/upload`, {
-      method: 'POST',
-      body: (() => {
-        const form = new FormData()
-        form.append('file', file)
-        return form
-      })(),
-    }).then(async (response) => {
-      if (!response.ok) {
-        const body = await response.json().catch(() => null) as { detail?: string } | null
-        throw new Error(body?.detail ?? `Request failed (${response.status})`)
-      }
-      return response.json() as Promise<{
-        filename: string
-        text: string
-        analysis: Record<string, unknown>
-      }>
-    }),
+    api.upload<{ filename: string; text: string; analysis: ResumeAnalysis }>('/resume/upload', file),
 
   analyzeResumeText: (text: string) =>
-    fetch(`${import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'}/resume/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    }).then(async (response) => {
-      if (!response.ok) {
-        const body = await response.json().catch(() => null) as { detail?: string } | null
-        throw new Error(body?.detail ?? `Request failed (${response.status})`)
-      }
-      return response.json() as Promise<Record<string, unknown>>
-    }),
+    api.post<ResumeAnalysis>('/resume/analyze', { text }),
 
   analyzeJob: (description: string, resumeText: string) =>
-    fetch(`${import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'}/job/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ description, resume_text: resumeText }),
-    }).then(async (response) => {
-      if (!response.ok) {
-        const body = await response.json().catch(() => null) as { detail?: string } | null
-        throw new Error(body?.detail ?? `Request failed (${response.status})`)
-      }
-      return response.json() as Promise<Record<string, unknown>>
-    }),
+    api.post<Record<string, unknown>>('/job/analyze', { description, resume_text: resumeText }),
 
-  indexDocument: (workspaceId: string, source: 'resume' | 'job_description', text: string) =>
-    fetch(`${import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api'}/rag/index`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workspace_id: workspaceId, source, text }),
-    }).then(async (response) => {
-      if (!response.ok) {
-        const body = await response.json().catch(() => null) as { detail?: string } | null
-        throw new Error(body?.detail ?? `Request failed (${response.status})`)
-      }
-      return response.json() as Promise<{ indexed_chunks: number; unchanged: boolean; source: string; document_id: string }>
-    }),
+  indexDocument: (workspaceId: string, source: IndexedSource, text: string) =>
+    api.post<IndexResult>('/rag/index', { workspace_id: workspaceId, source, text }),
 }

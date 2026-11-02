@@ -33,6 +33,10 @@ class Question(BaseModel):
     expected_concepts: list[str] = Field(default_factory=list)
 
 
+class QuestionSet(BaseModel):
+    questions: list[Question]
+
+
 class Evaluation(BaseModel):
     overall_score: float = Field(ge=0, le=10)
     category_scores: dict[str, float]

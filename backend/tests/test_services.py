@@ -7,7 +7,7 @@ from docx import Document
 from pydantic import ValidationError
 import httpx
 
-from app.services.analysis import analyze_job, analyze_resume, extract_skills
+from app.services.analysis import analyze_job, analyze_resume
 from app.services.documents import extract_text, split_chunks
 from app.services.llm import LLMUnavailableError, OllamaService
 from app.schemas.interview import Evaluation
@@ -69,7 +69,7 @@ def test_llm_json_extractor_handles_markdown_and_rejects_plain_text():
 
 
 def test_mock_llm_generates_questions_and_evaluations(monkeypatch):
-    from app.api.routes import QuestionSet
+    from app.schemas.interview import QuestionSet
     from app.core.config import get_settings
 
     monkeypatch.setattr(get_settings(), "mock_llm", True)
@@ -153,7 +153,7 @@ def test_ollama_status_reports_service_and_model_state(monkeypatch):
     ],
 )
 def test_ollama_parses_valid_and_fenced_json(monkeypatch, raw_response, expected_text):
-    from app.api.routes import QuestionSet
+    from app.schemas.interview import QuestionSet
     from app.core.config import get_settings
 
     settings = get_settings()
@@ -190,7 +190,7 @@ def test_ollama_retries_and_rejects_invalid_structured_output(
     raw_response,
     description,
 ):
-    from app.api.routes import QuestionSet
+    from app.schemas.interview import QuestionSet
     from app.core.config import get_settings
 
     settings = get_settings()
@@ -209,7 +209,7 @@ def test_ollama_retries_and_rejects_invalid_structured_output(
     monkeypatch.setattr("app.services.llm.httpx.post", fake_post)
     with pytest.raises(
         LLMUnavailableError,
-        match=f"after 3 attempts",
+        match="after 3 attempts",
     ):
         OllamaService().generate("prompt", QuestionSet)
     assert description
@@ -236,7 +236,7 @@ def test_evaluation_ollama_schema_requires_valid_category_scores():
 
 
 def test_invalid_raw_response_logging_is_development_only_and_explicit(monkeypatch, caplog):
-    from app.api.routes import QuestionSet
+    from app.schemas.interview import QuestionSet
     from app.core.config import get_settings
 
     settings = get_settings()

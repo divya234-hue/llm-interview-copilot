@@ -6,11 +6,11 @@ import pymupdf
 
 from app.db.database import Base, get_db
 from app.main import app
-from app.api.routes import QuestionSet
 from app.core.config import get_settings
 from app.models.indexed_document import IndexedDocument
-from app.schemas.interview import Evaluation
+from app.schemas.interview import Evaluation, QuestionSet
 from app.services.llm import OllamaService
+from app.services.llm import LLMUnavailableError
 from app.services.rag import LocalKnowledgeBase
 
 engine = create_engine(
@@ -189,9 +189,168 @@ def test_pdf_export_reports_generation_errors(monkeypatch):
             ))
             db.commit()
         monkeypatch.setattr(
-            "app.api.routes.generate_pdf_report",
+            "app.services.interview_workflows.generate_pdf_report",
             lambda report: (_ for _ in ()).throw(RuntimeError("renderer failure")),
         )
         response = client.get(f"/api/interviews/{session_id}/export?format=pdf")
         assert response.status_code == 500
         assert response.json()["detail"] == "Could not generate the PDF report; retry or export JSON."
+
+
+def test_generate_next_question_and_delete_routes(monkeypatch):
+    reset_database()
+    monkeypatch.setattr(OllamaService, "generate", fake_generate)
+    monkeypatch.setattr(
+        LocalKnowledgeBase,
+        "retrieve",
+        lambda self, query, workspace_id="local", limit=4: [],
+    )
+
+    generated = client.post("/api/interviews/generate", json={
+        "workspace_id": "route-workspace",
+        "interview_type": "python",
+        "count": 2,
+    })
+    assert generated.status_code == 200
+    assert generated.json() == {
+        "questions": [
+            {"text": "Explain Python lists.", "topic": "Python"},
+            {"text": "What is a dictionary?", "topic": "Python"},
+        ],
+        "source_snippets": [],
+    }
+
+    started = client.post("/api/interviews/start", json={
+        "workspace_id": "route-workspace",
+        "interview_type": "python",
+        "count": 2,
+    })
+    session_id = started.json()["session_id"]
+    next_item = client.post(f"/api/interviews/{session_id}/next-question")
+    assert next_item.status_code == 200
+    assert next_item.json() == {"question": "Explain Python lists.", "question_number": 1}
+
+    deleted = client.delete(f"/api/interviews/{session_id}")
+    assert deleted.status_code == 200
+    assert deleted.json() == {"deleted": True}
+    missing = client.get(f"/api/interviews/{session_id}/report")
+    assert missing.status_code == 404
+
+
+def test_resume_upload_and_rag_search_routes(monkeypatch):
+    reset_database()
+    monkeypatch.setattr(
+        "app.services.document_processing.extract_text",
+        lambda filename, content: "Built Python applications.",
+    )
+    uploaded = client.post(
+        "/api/resume/upload",
+        files={"file": ("resume.pdf", b"fixture", "application/pdf")},
+    )
+    assert uploaded.status_code == 200
+    assert uploaded.json()["filename"] == "resume.pdf"
+    assert uploaded.json()["text"] == "Built Python applications."
+    assert uploaded.json()["analysis"]["skills"] == ["python"]
+
+    monkeypatch.setattr(
+        LocalKnowledgeBase,
+        "retrieve",
+        lambda self, query, workspace_id="local", limit=4: [f"{workspace_id}: {query}"],
+    )
+    searched = client.post("/api/rag/search", json={
+        "workspace_id": "search-workspace",
+        "text": "Python evidence",
+    })
+    assert searched.status_code == 200
+    assert searched.json() == {"sources": ["search-workspace: Python evidence"]}
+
+
+def test_api_openapi_contracts_remain_available():
+    paths = client.get("/openapi.json").json()["paths"]
+    expected_methods = {
+        "/api/health": {"get"},
+        "/api/llm/status": {"get"},
+        "/api/resume/upload": {"post"},
+        "/api/resume/analyze": {"post"},
+        "/api/job/analyze": {"post"},
+        "/api/rag/index": {"post"},
+        "/api/rag/search": {"post"},
+        "/api/interviews/generate": {"post"},
+        "/api/interviews/start": {"post"},
+        "/api/interviews/{session_id}/answer": {"post"},
+        "/api/interviews/{session_id}/next-question": {"post"},
+        "/api/interviews/{session_id}/finish": {"post"},
+        "/api/interviews/history": {"get"},
+        "/api/interviews/{session_id}/report": {"get"},
+        "/api/interviews/{session_id}/export": {"get"},
+        "/api/interviews/{session_id}": {"delete"},
+        "/api/dashboard/stats": {"get"},
+    }
+
+    for path, methods in expected_methods.items():
+        assert methods <= set(paths[path])
+
+    assert "multipart/form-data" in paths["/api/resume/upload"]["post"]["requestBody"]["content"]
+    assert "application/json" in paths["/api/job/analyze"]["post"]["requestBody"]["content"]
+    assert "application/json" in paths["/api/interviews/start"]["post"]["requestBody"]["content"]
+    assert any(
+        parameter["name"] == "format"
+        for parameter in paths["/api/interviews/{session_id}/export"]["get"]["parameters"]
+    )
+
+
+def test_job_analysis_route_returns_existing_analysis_contract():
+    response = client.post("/api/job/analyze", json={
+        "description": "We develop Python and React applications.",
+        "resume_text": "Built Python services.",
+    })
+
+    assert response.status_code == 200
+    result = response.json()
+    assert set(result) == {
+        "required_skills",
+        "preferred_skills",
+        "responsibilities",
+        "experience_requirements",
+        "matched_skills",
+        "missing_skills",
+        "match_score",
+        "score_label",
+        "evidence",
+    }
+    assert result["matched_skills"] == ["python"]
+    assert result["missing_skills"] == ["react"]
+    assert result["match_score"] == 50
+
+
+def test_malformed_requests_missing_rag_documents_and_unavailable_ollama(monkeypatch):
+    reset_database()
+    invalid_resume = client.post("/api/resume/analyze", json={"text": "  "})
+    invalid_interview = client.post("/api/interviews/start", json={"count": 0})
+    assert invalid_resume.status_code == 422
+    assert invalid_interview.status_code == 422
+
+    monkeypatch.setattr(LocalKnowledgeBase, "retrieve", lambda *args, **kwargs: [])
+    missing_documents = client.post("/api/rag/search", json={
+        "workspace_id": "empty-workspace",
+        "text": "Search an empty workspace.",
+    })
+    assert missing_documents.status_code == 200
+    assert missing_documents.json() == {"sources": []}
+
+    monkeypatch.setattr(get_settings(), "mock_llm", False)
+    monkeypatch.setattr(
+        OllamaService,
+        "generate",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            LLMUnavailableError("Cannot connect to Ollama. Start Ollama and retry.")
+        ),
+    )
+    unavailable = client.post("/api/interviews/start", json={
+        "interview_type": "python",
+        "count": 1,
+    })
+    assert unavailable.status_code == 503
+    assert unavailable.json() == {
+        "detail": "Cannot connect to Ollama. Start Ollama and retry."
+    }

@@ -1,49 +1,33 @@
-import React, { Suspense, lazy, useCallback, useEffect, useState } from 'react'
+import React, { Suspense, lazy, useEffect, useState } from 'react'
 import {
   ArrowDownToLine, ArrowRight, BarChart3, BriefcaseBusiness, Check, ChevronRight,
   CircleHelp, FileText, History, LayoutDashboard, LoaderCircle, Menu, Moon, Plus,
   Send, Sparkles, Sun, Trash2, Trophy, UploadCloud, X,
 } from 'lucide-react'
-import { api } from './services/api'
+import { useWorkspace } from './hooks/useWorkspace'
+import {
+  deleteInterview as deleteInterviewRequest,
+  downloadInterviewReport,
+  finishInterview as finishInterviewRequest,
+  getInterviewReport,
+  startInterview as startInterviewRequest,
+  submitAnswer as submitAnswerRequest,
+} from './services/interviewService'
+import type { InterviewReport, SessionState } from './services/interviewService'
+import { resumeService, type IndexedSource } from './services/resumeService'
 import type { DashboardStats, Evaluation, InterviewItem, ResumeAnalysis } from './types'
 
 const SkillChart = lazy(() => import('./components/SkillChart'))
 
 type View = 'dashboard' | 'prepare' | 'interview' | 'history'
-type QuestionAnswerResponse = { evaluation: Evaluation; next_question: string | null; question_number: number; total_questions: number }
-type SessionState = { id: string; question: string; questionNumber: number; total: number; nextQuestion?: string; nextQuestionNumber?: number; sources: string[] }
-type InterviewReport = {
-  id: string
-  title: string
-  mode: string
-  difficulty: string
-  status: string
-  average_score: number | null
-  questions: { text: string; topic: string }[]
-  answers: { question: string; answer: string; evaluation: Evaluation }[]
-  score_notice: string
-}
-type IndexedSource = 'resume' | 'job_description'
 type IndexStatus = { state: 'idle' | 'indexing' | 'indexed' | 'error'; message?: string; chunks?: number }
 
 const modes = ['mixed', 'technical', 'hr', 'python', 'programming', 'dsa', 'ml', 'nlp_llm_rag', 'projects', 'behavioral', 'system_design']
-
-function getWorkspaceId(): string {
-  const key = 'interview-copilot-workspace-id'
-  const existing = localStorage.getItem(key)
-  if (existing) return existing
-  const workspaceId = 'local'
-  localStorage.setItem(key, workspaceId)
-  return workspaceId
-}
 
 function App() {
   const [view, setView] = useState<View>('dashboard')
   const [dark, setDark] = useState(() => localStorage.getItem('theme') === 'dark')
   const [mobileNav, setMobileNav] = useState(false)
-  const [stats, setStats] = useState<DashboardStats | null>(null)
-  const [history, setHistory] = useState<InterviewItem[]>([])
-  const [workspaceId] = useState(getWorkspaceId)
   const [report, setReport] = useState<InterviewReport | null>(null)
   const [resumeText, setResumeText] = useState('')
   const [resumeAnalysis, setResumeAnalysis] = useState<ResumeAnalysis | null>(null)
@@ -63,19 +47,7 @@ function App() {
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-
-  const refresh = useCallback(async () => {
-    try {
-      const [dashboard, items] = await Promise.all([
-        api.get<DashboardStats>(`/dashboard/stats?workspace_id=${workspaceId}`),
-        api.get<InterviewItem[]>(`/interviews/history?workspace_id=${workspaceId}`),
-      ])
-      setStats(dashboard)
-      setHistory(items)
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Could not load dashboard data.')
-    }
-  }, [workspaceId])
+  const { stats, history, workspaceId, refresh } = useWorkspace(setError)
 
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => {
@@ -94,11 +66,7 @@ function App() {
   const indexDocument = async (source: IndexedSource, text: string) => {
     setIndexStatus(previous => ({ ...previous, [source]: { state: 'indexing' } }))
     try {
-      const result = await api.post<{ indexed_chunks: number; unchanged: boolean }>('/rag/index', {
-        workspace_id: workspaceId,
-        source,
-        text,
-      })
+      const result = await resumeService.indexDocument(workspaceId, source, text)
       setIndexStatus(previous => ({
         ...previous,
         [source]: {
@@ -117,7 +85,7 @@ function App() {
   const uploadResume = (file?: File) => {
     if (!file) return
     void run(async () => {
-      const result = await api.upload<{ text: string; analysis: ResumeAnalysis }>('/resume/upload', file)
+      const result = await resumeService.uploadResume(file)
       setResumeText(result.text)
       setResumeAnalysis(result.analysis)
       await indexDocument('resume', result.text)
@@ -125,13 +93,12 @@ function App() {
   }
 
   const analyzeJob = () => run(async () => {
-    const result = await api.post<Record<string, unknown>>('/job/analyze', { description: jobDescription, resume_text: resumeText })
-    setJobAnalysis(result)
+    setJobAnalysis(await resumeService.analyzeJob(jobDescription, resumeText))
     await indexDocument('job_description', jobDescription)
   })
 
   const startInterview = () => run(async () => {
-    const result = await api.post<{ session_id: string; question: string; question_number: number; total_questions: number; source_snippets: string[] }>('/interviews/start', {
+    const result = await startInterviewRequest({
       title: `${mode.replaceAll('_', ' ')} practice`,
       workspace_id: workspaceId,
       resume_text: resumeText,
@@ -150,7 +117,7 @@ function App() {
   const submitAnswer = () => {
     if (!session) return
     void run(async () => {
-      const result = await api.post<QuestionAnswerResponse>(`/interviews/${session.id}/answer`, { answer })
+      const result = await submitAnswerRequest(session.id, answer)
       setEvaluation(result.evaluation)
       setSession({ ...session, nextQuestion: result.next_question ?? undefined, nextQuestionNumber: result.question_number, total: result.total_questions })
       setAnswer('')
@@ -160,7 +127,7 @@ function App() {
   const finishInterview = () => {
     if (!session) return
     void run(async () => {
-      await api.post(`/interviews/${session.id}/finish`, {})
+      await finishInterviewRequest(session.id)
       setSession(null)
       setEvaluation(null)
       setView('history')
@@ -169,18 +136,18 @@ function App() {
   }
 
   const deleteInterview = (id: string) => void run(async () => {
-    await api.delete(`/interviews/${id}`)
+    await deleteInterviewRequest(id)
     await refresh()
   })
 
   const showReport = (id: string) => void run(async () => {
-    setReport(await api.get<InterviewReport>(`/interviews/${id}/report`))
+    setReport(await getInterviewReport(id))
   })
 
   const exportReport = (format: 'json' | 'pdf') => {
     if (!report) return
     void run(async () => {
-      const blob = await api.download(`/interviews/${report.id}/export?format=${format}`)
+      const blob = await downloadInterviewReport(report.id, format)
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
@@ -249,7 +216,7 @@ function App() {
                 {resumeAnalysis && <div className="analysis-box"><div className="analysis-title"><Check size={16} /> Resume analyzed</div><div className="chip-list">{resumeAnalysis.skills.map(skill => <span className="chip" key={skill}>{skill}</span>)}</div><div className="match-columns"><div><b>Sections found</b><p>{resumeAnalysis.sections_found.join(', ') || 'No recognized sections'}</p></div><div><b>Sections not found</b><p>{resumeAnalysis.sections_not_found.join(', ') || 'None'}</p></div></div>{resumeAnalysis.strengths.length > 0 && <p className="analysis-detail"><b>Signals found:</b> {resumeAnalysis.strengths.join(' ')}</p>}{resumeAnalysis.suggestions.map((suggestion, index) => <p className="analysis-detail" key={index}><b>Suggestion:</b> {suggestion}</p>)}<small>{resumeAnalysis.notice}</small></div>}
                 <IndexStatus status={indexStatus.resume} />
                 <label className="field-label">Or paste resume text</label><textarea className="text-area compact-area" value={resumeText} onChange={event => { setResumeText(event.target.value); setIndexStatus(previous => ({ ...previous, resume: { state: 'idle' } })) }} placeholder="Paste resume text here…" />
-                <button className="button button-secondary full-button" disabled={!resumeText || busy} onClick={() => void run(async () => { const result = await api.post<ResumeAnalysis>('/resume/analyze', { text: resumeText }); setResumeAnalysis(result); await indexDocument('resume', resumeText) })}>Analyze &amp; index resume</button>
+                <button className="button button-secondary full-button" disabled={!resumeText || busy} onClick={() => void run(async () => { const result = await resumeService.analyzeResumeText(resumeText); setResumeAnalysis(result); await indexDocument('resume', resumeText) })}>Analyze &amp; index resume</button>
               </div>
               <div className="panel document-panel">
                 <div className="panel-heading"><div className="icon-tile blue"><BriefcaseBusiness size={18} /></div><div><h3>Job description</h3><p>Compare your skills with the role requirements</p></div></div>
